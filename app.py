@@ -142,33 +142,52 @@ def subscribe_kick_events(uid, token, channel_name, broadcaster_id):
     # Webhook endpoint - kendi sitemiz
     webhook_url = f"https://kbot-u8we.onrender.com/webhook/{uid}"
 
-    # Event subscription olustur
-    payload = json.dumps({
-        "events": [
-            {
-                "name": "chat.message.sent",
-                "version": 1,
-                "broadcaster_user_id": int(broadcaster_id)
-            }
-        ],
-        "method": "webhook",
-        "webhook_url": webhook_url
-    }).encode()
+    # Kick Event Subscription - farkli formatlari dene
+    payloads = [
+        # Format 1: Resmi doks formati
+        {
+            "events": [
+                {"name": "chat.message.sent", "version": 1, "broadcaster_user_id": int(broadcaster_id)}
+            ],
+            "method": "webhook",
+            "webhook_url": webhook_url
+        },
+        # Format 2: Alternatif
+        {
+            "type": "chat.message.sent",
+            "version": 1,
+            "broadcaster_user_id": int(broadcaster_id),
+            "method": "webhook",
+            "webhook_url": webhook_url
+        },
+        # Format 3: events array olmadan
+        {
+            "broadcaster_user_id": int(broadcaster_id),
+            "event": "chat.message.sent",
+            "method": "webhook",
+            "webhook_url": webhook_url
+        }
+    ]
 
-    try:
-        req = urllib.request.Request(
-            "https://api.kick.com/public/v1/events/subscriptions",
-            data=payload, headers=hdrs, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-            raw = r.read()
-        if raw[:2] == b'\x1f\x8b': raw = gzip.decompress(raw)
-        result = json.loads(raw)
-        bot_log(uid, f"Event subscription olusturuldu: {result}")
-        return result.get("data", {}).get("id")
-    except Exception as e:
-        bot_log(uid, f"Event subscription hatasi: {e}")
-        return None
+    for payload in payloads:
+        try:
+            req = urllib.request.Request(
+                "https://api.kick.com/public/v1/events/subscriptions",
+                data=json.dumps(payload).encode(),
+                headers=hdrs, method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+                raw = r.read()
+            if raw[:2] == b'\x1f\x8b': raw = gzip.decompress(raw)
+            result = json.loads(raw)
+            bot_log(uid, f"✅ Event subscription OK: {str(result)[:100]}")
+            return result.get("data", {}).get("id") or "ok"
+        except Exception as e:
+            bot_log(uid, f"Format deneniyor... {str(e)[:60]}")
+            continue
+
+    bot_log(uid, "Event subscription basarisiz - webhook desteklenmiyor olabilir")
+    return None
 
 def get_broadcaster_id(channel, token):
     """Kanal slug'undan broadcaster_user_id alir."""
