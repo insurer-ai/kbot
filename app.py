@@ -139,8 +139,8 @@ def subscribe_kick_events(uid, token, channel_name, broadcaster_id):
         "User-Agent": "Mozilla/5.0 Chrome/122",
     }
 
-    # Webhook endpoint - kendi sitemiz
-    webhook_url = f"https://kbot-u8we.onrender.com/webhook/{uid}"
+    # Webhook endpoint - sabit URL, broadcaster_id ile eslestirilir
+    webhook_url = "https://kbot-u8we.onrender.com/webhook/kick"
 
     # Kick Event Subscription - farkli formatlari dene
     payloads = [
@@ -236,6 +236,11 @@ def poll_chat(uid, settings):
     bot_log(uid, f"Broadcaster ID: {broadcaster_id}")
 
     if broadcaster_id:
+        # Broadcaster ID'yi kullanici verisine kaydet
+        data2 = load_data()
+        if uid in data2:
+            data2[uid]["broadcaster_id"] = str(broadcaster_id)
+            save_data(data2)
         # Event subscription ile bagli kal
         sub_id = subscribe_kick_events(uid, token, channel, broadcaster_id)
         if sub_id:
@@ -420,51 +425,75 @@ def api_status():
 def serve_clip(filename):
     return send_from_directory(CLIPS_DIR, filename)
 
-@app.route("/webhook/<uid>", methods=["POST"])
-def webhook_receiver(uid):
-    """Kick Event Subscription webhook alici."""
+@app.route("/webhook/kick", methods=["POST", "GET"])
+def webhook_receiver_kick():
+    """Kick Event Subscription webhook - tum kullanicilara hizmet eder."""
     from flask import request as freq
-    import hmac, hashlib
+
+    # Kick dogrulama challenge
+    if freq.method == "GET":
+        challenge = freq.args.get("challenge", "")
+        return challenge, 200
 
     data = freq.get_json(force=True) or {}
-    event = data.get("event") or {}
-    event_type = event.get("type", "") or data.get("type", "")
 
-    # chat.message.sent eventi
-    if "chat" in event_type.lower() or "message" in event_type.lower():
-        msg_data = event.get("data") or data.get("data") or {}
-        content_text = (msg_data.get("content") or "").strip().lower()
-        sender = msg_data.get("sender") or {}
-        user = sender.get("username") or sender.get("slug") or "?"
+    # Kick webhook formatini parse et
+    event_type = (data.get("type") or
+                  (data.get("event") or {}).get("type") or "")
+    inner = data.get("data") or (data.get("event") or {}).get("data") or {}
+    broadcaster_id = str(inner.get("broadcaster_user_id") or
+                         data.get("broadcaster_user_id") or "")
 
-        bot_log(uid, f"Webhook mesaj: {user}: {content_text[:30]}")
+    content_text = (inner.get("content") or "").strip().lower()
+    sender = inner.get("sender") or {}
+    msg_user = sender.get("username") or sender.get("slug") or "?"
 
-        if content_text == "!clip" and uid in active_bots and active_bots[uid].get("running"):
-            settings = load_data().get(uid, {})
-            channel   = settings.get("channel", "")
-            token     = settings.get("access_token", "")
-            manual_url = settings.get("manual_hls_url", "")
-            duration  = int(settings.get("clip_duration", 180))
+    # Bu broadcaster'a ait aktif botu bul
+    all_data = load_data()
+    target_uid = None
+    for uid2, udata in all_data.items():
+        if str(udata.get("broadcaster_id", "")) == broadcaster_id:
+            target_uid = uid2
+            break
+        # broadcaster_id yoksa chatroom_id ile esles
+        if broadcaster_id and broadcaster_id in str(udata.get("chatroom_id", "")):
+            target_uid = uid2
+            break
 
-            bot_log(uid, f"✅ !clip alindi → {user}")
-            active_bots[uid]["clip_in_progress"] = True
+    if not target_uid:
+        # Aktif botta ara
+        for uid2 in active_bots:
+            if active_bots[uid2].get("running"):
+                target_uid = uid2
+                break
 
-            def do_clip(cu=user):
-                fname = record_clip(uid, channel, token, manual_url, duration, CLIPS_DIR)
-                if fname:
-                    active_bots[uid]["clips"].insert(0, {
-                        "file": fname, "user": cu,
-                        "ts": datetime.now().strftime("%d.%m %H:%M"),
-                        "url": f"/clips/{fname}"
-                    })
-                    active_bots[uid]["clips"] = active_bots[uid]["clips"][:30]
-                    d2 = load_data()
-                    if uid in d2:
-                        d2[uid]["clips"] = active_bots[uid]["clips"]
-                        save_data(d2)
-                active_bots[uid]["clip_in_progress"] = False
+    if target_uid:
+        bot_log(target_uid, f"Webhook: {msg_user}: {content_text[:30]}")
 
-            threading.Thread(target=do_clip, daemon=True).start()
+    if content_text == "!clip" and target_uid and active_bots.get(target_uid, {}).get("running"):
+        settings = all_data.get(target_uid, {})
+        channel    = settings.get("channel", "")
+        token      = settings.get("access_token", "")
+        manual_url = settings.get("manual_hls_url", "")
+        duration   = int(settings.get("clip_duration", 180))
+
+        bot_log(target_uid, f"✅ !clip alindi → {msg_user}")
+
+        def do_clip(cu=msg_user, tuid=target_uid):
+            fname = record_clip(tuid, channel, token, manual_url, duration, CLIPS_DIR)
+            if fname:
+                active_bots[tuid]["clips"].insert(0, {
+                    "file": fname, "user": cu,
+                    "ts": datetime.now().strftime("%d.%m %H:%M"),
+                    "url": f"/clips/{fname}"
+                })
+                active_bots[tuid]["clips"] = active_bots[tuid]["clips"][:30]
+                d2 = load_data()
+                if tuid in d2:
+                    d2[tuid]["clips"] = active_bots[tuid]["clips"]
+                    save_data(d2)
+
+        threading.Thread(target=do_clip, daemon=True).start()
 
     return {"status": "ok"}, 200
 
