@@ -120,22 +120,108 @@ def record_clip(uid, channel, token, manual_url, duration):
     if not hls:
         bot_log(uid, "Stream URL yok — Manuel URL gir!")
         return None
-    ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"clip_{ts}.mp4"
-    fpath = os.path.join(CLIPS_DIR, fname)
+
+    ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+    raw_f   = os.path.join(CLIPS_DIR, f"raw_{ts}.mp4")
+    final_f = os.path.join(CLIPS_DIR, f"clip_{ts}.mp4")
+    safe_ch = channel.replace("'","").replace(":","").replace("\\","")
+
     try:
+        # 1. Ham kayit
         bot_log(uid, f"Kaydediliyor ({duration}s)...")
-        subprocess.run([
-            "ffmpeg", "-y", "-i", hls, "-t", str(duration),
-            "-c", "copy", "-movflags", "+faststart", fpath
+        r = subprocess.run([
+            "ffmpeg", "-y", "-i", hls,
+            "-t", str(duration),
+            "-c", "copy",
+            "-movflags", "+faststart",
+            raw_f
         ], timeout=duration+60, capture_output=True)
-        if os.path.exists(fpath) and os.path.getsize(fpath) > 10000:
-            bot_log(uid, f"✅ Klip hazir: {fname}")
-            return fname
-        bot_log(uid, "Klip kaydedilemedi (dosya bos)")
+
+        if not os.path.exists(raw_f) or os.path.getsize(raw_f) < 10000:
+            bot_log(uid, "Ham kayit basarisiz")
+            return None
+
+        bot_log(uid, "Dikey formata cevriliyior (9:16)...")
+
+        # 2. Dikey montaj:
+        # - Ust yari: oyun video (1080x1080, blur bg uzerine)
+        # - Alt yari: koyu panel + KICK + kanal adi
+        # - Sol ust kose: @kanal etiketi
+        fc = (
+            # Blur arka plan (tum ekrani kaplar)
+            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,boxblur=20:5[bg];"
+            # Ana oyun video (ust 1080px)
+            "[0:v]scale=1080:1080:force_original_aspect_ratio=decrease,"
+            "pad=1080:1080:(ow-iw)/2:(oh-ih)/2:black@0[game];"
+            # Birlestir
+            "[bg][game]overlay=0:0[merged];"
+            # Overlayleri ekle
+            "[merged]"
+            # Alt panel
+            "drawbox=x=0:y=1080:w=iw:h=840:color=0x050510@0.95:t=fill,"
+            # Yesil cizgi
+            "drawbox=x=0:y=1080:w=iw:h=4:color=0x53FC18:t=fill,"
+            # KICK yazisi
+            f"drawtext=text='KICK':fontsize=130:fontcolor=0x53FC18:"
+            f"x=(w-text_w)/2:y=1120:"
+            f"shadowcolor=black@0.9:shadowx=3:shadowy=3,"
+            # Kanal adi
+            f"drawtext=text='{safe_ch}':fontsize=72:fontcolor=white:"
+            f"x=(w-text_w)/2:y=1310:"
+            f"shadowcolor=black@0.8:shadowx=2:shadowy=2,"
+            # kick.com linki
+            f"drawtext=text='kick.com/{safe_ch}':fontsize=48:fontcolor=0x53FC18@0.85:"
+            f"x=(w-text_w)/2:y=1430:"
+            f"shadowcolor=black@0.6:shadowx=1:shadowy=1,"
+            # Sol ust etiket
+            f"drawbox=x=0:y=0:w=380:h=56:color=black@0.65:t=fill,"
+            f"drawtext=text='  @{safe_ch}':fontsize=30:fontcolor=white:"
+            f"x=10:y=14:shadowcolor=black:shadowx=1:shadowy=1"
+            "[out]"
+        )
+
+        # GPU encode dene, olmassa CPU
+        encoded = False
+        for enc in [
+            ["-c:v", "h264_nvenc", "-preset", "p1", "-rc", "vbr", "-cq", "24"],
+            ["-c:v", "h264_amf",   "-quality", "speed"],
+            ["-c:v", "libx264",    "-preset", "ultrafast", "-crf", "23"],
+        ]:
+            try:
+                r2 = subprocess.run([
+                    "ffmpeg", "-y", "-i", raw_f,
+                    "-filter_complex", fc,
+                    "-map", "[out]", "-map", "0:a?",
+                    *enc,
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-r", "60", "-movflags", "+faststart",
+                    final_f
+                ], timeout=300, capture_output=True)
+                if os.path.exists(final_f) and os.path.getsize(final_f) > 10000:
+                    encoded = True
+                    break
+            except:
+                if os.path.exists(final_f):
+                    os.remove(final_f)
+                continue
+
+        # Temizle
+        if os.path.exists(raw_f):
+            os.remove(raw_f)
+
+        if encoded:
+            bot_log(uid, f"✅ Dikey klip hazir: clip_{ts}.mp4")
+            return f"clip_{ts}.mp4"
+        else:
+            bot_log(uid, "Dikey montaj basarisiz")
+            return None
+
     except Exception as e:
-        bot_log(uid, f"FFmpeg hatasi: {e}")
-    return None
+        bot_log(uid, f"Kayit hatasi: {str(e)[:80]}")
+        for f in [raw_f, final_f]:
+            if os.path.exists(f): os.remove(f)
+        return None
 
 def run_bot(uid, settings):
     token          = settings.get("access_token", "")
