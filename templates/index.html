@@ -428,14 +428,22 @@ header{
         </div>
         <div class="clip-list" id="clips-list">
           {% if clips %}
-            {% for c in clips[:10] %}
+            {% set ns = namespace(last_day="") %}
+            {% for c in clips[:30] %}
+              {% set day = (c.created_at or c.ts or "")[:10] %}
+              {% if day != ns.last_day %}
+                {% set ns.last_day = day %}
+                <div style="padding:8px 12px 4px;font-size:10px;font-family:var(--font-mono);color:var(--tx3);letter-spacing:1px;text-transform:uppercase;border-top:1px solid var(--bdr);margin-top:4px">
+                  {{ day or "Bugün" }}
+                </div>
+              {% endif %}
             <div class="clip-item">
               <div class="clip-thumb">🎮</div>
               <div class="clip-info">
-                <div class="clip-user">{{ c.user }}</div>
-                <div class="clip-meta">{{ c.ts }}</div>
+                <div class="clip-user">{{ c.triggered_by or c.user or "?" }}</div>
+                <div class="clip-meta">{{ (c.created_at or c.ts or "")[11:16] }}</div>
               </div>
-              <a href="{{ c.url }}" download class="clip-dl">⬇ İndir</a>
+              <a href="{{ c.url }}" target="_blank" class="clip-dl">⬇ İndir</a>
             </div>
             {% endfor %}
           {% else %}
