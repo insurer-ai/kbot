@@ -6,9 +6,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = "clipbot_secret_2024_xK9mP"
-app.config["SESSION_COOKIE_SECURE"]   = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 30  # 30 gun
+app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 30
 
 KICK_CLIENT_ID     = "01KNFT27H9FKB3KYPN7AWBYKK4"
 KICK_CLIENT_SECRET = "4b83a5d95ca99bbc6fa1f8d9630dce2c8b5caf3682c1fc1395a0ae0fd721c0f9"
@@ -16,18 +14,87 @@ REDIRECT_URI       = "https://kbot-u8we.onrender.com/callback"
 SCOPES             = "user:read channel:read events:subscribe chat:write"
 WEBHOOK_URL        = "https://kbot-u8we.onrender.com/webhook/kick"
 
+SUPABASE_URL = "https://ciifjrpwvjtzamskwufu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNpaWZqcnB3dmp0emFtc2t3dWZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NzE1MTQsImV4cCI6MjA5MTA0NzUxNH0.V5I-NTWlefG1ilDboap3praDfFq0EVILPmYWNncn7lA"
+
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 CLIPS_DIR = os.path.join(BASE_DIR, "static", "clips")
-DATA_FILE = os.path.join(BASE_DIR, "users.json")
 os.makedirs(CLIPS_DIR, exist_ok=True)
 
-def load_data():
-    try:
-        with open(DATA_FILE) as f: return json.load(f)
-    except: return {}
+# ── Supabase helpers ──────────────────────────────────────
+def sb_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
 
-def save_data(d):
-    with open(DATA_FILE, "w") as f: json.dump(d, f, indent=2)
+def sb_get(table, filters=""):
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{filters}"
+    req = urllib.request.Request(url, headers=sb_headers())
+    with urllib.request.urlopen(req, timeout=10, context=make_ctx()) as r:
+        return json.loads(r.read())
+
+def sb_upsert(table, data):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    body = json.dumps(data).encode()
+    hdrs = {**sb_headers(), "Prefer": "resolution=merge-duplicates,return=representation"}
+    req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
+    with urllib.request.urlopen(req, timeout=10, context=make_ctx()) as r:
+        return json.loads(r.read())
+
+def sb_insert(table, data):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, headers=sb_headers(), method="POST")
+    with urllib.request.urlopen(req, timeout=10, context=make_ctx()) as r:
+        return json.loads(r.read())
+
+def sb_upload(bucket, path, data, content_type="video/mp4"):
+    url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{path}"
+    hdrs = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": content_type,
+    }
+    req = urllib.request.Request(url, data=data, headers=hdrs, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120, context=make_ctx()) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        return {"error": str(e)}
+
+def sb_public_url(bucket, path):
+    return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}"
+
+def load_user(uid):
+    try:
+        rows = sb_get("users", f"uid=eq.{uid}")
+        return rows[0] if rows else None
+    except: return None
+
+def save_user(data):
+    try: sb_upsert("users", data)
+    except Exception as e: print(f"save_user error: {e}")
+
+def get_user_clips(uid, limit=30):
+    try:
+        rows = sb_get("clips", f"uid=eq.{uid}&order=created_at.desc&limit={limit}")
+        return rows
+    except: return []
+
+def save_clip_record(uid, filename, triggered_by, public_url):
+    try:
+        sb_insert("clips", {
+            "uid": uid,
+            "filename": filename,
+            "triggered_by": triggered_by,
+            "url": public_url,
+            "created_at": datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        print(f"save_clip error: {e}")
 
 def make_ctx():
     ctx = ssl.create_default_context()
@@ -37,7 +104,7 @@ def make_ctx():
 
 def fetch(url, token=None, method="GET", body=None, content_type=None):
     hdrs = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122",
+        "User-Agent": "Mozilla/5.0 Chrome/122",
         "Accept": "application/json",
         "Accept-Encoding": "gzip, deflate",
     }
@@ -86,8 +153,7 @@ def get_channel_info(slug, token):
         d = json.loads(resp)
         items = d.get("data") or []
         return items[0] if items else {}
-    except:
-        return {}
+    except: return {}
 
 # ── Bot ───────────────────────────────────────────────────
 active_bots = {}
@@ -118,107 +184,99 @@ def subscribe_events(uid, token, broadcaster_id):
         bot_log(uid, f"Webhook hatasi: {e}")
         return False
 
-def record_clip(uid, channel, token, manual_url, duration):
+def record_and_upload(uid, channel, token, manual_url, duration, triggered_by):
     hls = manual_url or ""
     if not hls:
         bot_log(uid, "Stream URL yok — Manuel URL gir!")
         return None
 
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    raw_f   = os.path.join(CLIPS_DIR, f"raw_{ts}.ts")   # .ts = daha az bellek
+    raw_f   = os.path.join(CLIPS_DIR, f"raw_{ts}.mp4")
     final_f = os.path.join(CLIPS_DIR, f"clip_{ts}.mp4")
     safe_ch = channel.replace("'","").replace(":","").replace("\\","")
 
     try:
-        # 1. Ham kayit - dusuk cozunurluk, az bellek
         bot_log(uid, f"Kaydediliyor ({duration}s)...")
-        r = subprocess.run([
-            "ffmpeg", "-y",
-            "-i", hls,
+        subprocess.run([
+            "ffmpeg", "-y", "-i", hls,
             "-t", str(duration),
-            "-vf", "scale=640:360",       # kayit sirasinda kucult - az RAM
+            "-vf", "scale=640:360",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "96k",
-            "-r", "30",
+            "-c:a", "aac", "-b:a", "96k", "-r", "30",
             raw_f
         ], timeout=duration+120, capture_output=True)
 
         if not os.path.exists(raw_f) or os.path.getsize(raw_f) < 10000:
-            bot_log(uid, f"Ham kayit basarisiz: {r.stderr.decode()[-200:] if r else ''}")
+            bot_log(uid, "Ham kayit basarisiz")
             return None
 
-        bot_log(uid, "Dikey formata cevriliyior (9:16)...")
+        bot_log(uid, "Dikey formata cevriliyor (9:16)...")
 
-        # 2. Dikey montaj:
-        # - Ust yari: oyun video (1080x1080, blur bg uzerine)
-        # - Alt yari: koyu panel + KICK + kanal adi
-        # - Sol ust kose: @kanal etiketi
         fc = (
-            # Blur arka plan
             "[0:v]scale=720:1280:force_original_aspect_ratio=increase,"
-            "crop=720:1280,boxblur=15:4[bg];"
-            # Ana oyun video (ust 720px kare)
+            "crop=720:1280,boxblur=20:5[bg];"
             "[0:v]scale=720:720:force_original_aspect_ratio=decrease,"
             "pad=720:720:(ow-iw)/2:(oh-ih)/2:black@0[game];"
-            # Birlestir
-            "[bg][game]overlay=0:0[merged];"
-            # Overlayleri ekle
-            "[merged]"
-            # Alt panel
-            "drawbox=x=0:y=720:w=iw:h=560:color=0x050510@0.95:t=fill,"
-            # Yesil cizgi
-            "drawbox=x=0:y=720:w=iw:h=4:color=0x53FC18:t=fill,"
-            # KICK yazisi
-            f"drawtext=text='KICK':fontsize=90:fontcolor=0x53FC18:"
-            f"x=(w-text_w)/2:y=750:"
-            f"shadowcolor=black@0.9:shadowx=3:shadowy=3,"
-            # Kanal adi
-            f"drawtext=text='{safe_ch}':fontsize=50:fontcolor=white:"
-            f"x=(w-text_w)/2:y=900:"
-            f"shadowcolor=black@0.8:shadowx=2:shadowy=2,"
-            # kick.com linki
-            f"drawtext=text='kick.com/{safe_ch}':fontsize=32:fontcolor=0x53FC18@0.85:"
-            f"x=(w-text_w)/2:y=980:"
-            f"shadowcolor=black@0.6:shadowx=1:shadowy=1,"
-            # Sol ust etiket
-            f"drawbox=x=0:y=0:w=280:h=42:color=black@0.65:t=fill,"
-            f"drawtext=text='  @{safe_ch}':fontsize=22:fontcolor=white:"
-            f"x=10:y=14:shadowcolor=black:shadowx=1:shadowy=1"
+            "[bg][game]overlay=0:0[base];"
+            "[base]"
+            "drawbox=x=0:y=420:w=720:h=380:color=black@0.75:t=fill,"
+            "drawbox=x=0:y=420:w=720:h=3:color=0x53FC18:t=fill,"
+            "drawbox=x=0:y=797:w=720:h=3:color=0x53FC18:t=fill,"
+            f"drawtext=text='K':fontsize=140:fontcolor=0x53FC18:"
+            f"x=(w-text_w)/2:y=450:shadowcolor=black:shadowx=4:shadowy=4,"
+            f"drawtext=text='{safe_ch}':fontsize=52:fontcolor=white:"
+            f"x=(w-text_w)/2:y=610:shadowcolor=black@0.9:shadowx=2:shadowy=2,"
+            f"drawtext=text='kick.com/{safe_ch}':fontsize=30:fontcolor=0x53FC18:"
+            f"x=(w-text_w)/2:y=680:shadowcolor=black@0.8:shadowx=1:shadowy=1,"
+            "drawbox=x=0:y=1240:w=720:h=40:color=black@0.8:t=fill,"
+            f"drawtext=text='@{safe_ch}  kick.com/{safe_ch}':"
+            f"fontsize=18:fontcolor=white@0.8:x=(w-text_w)/2:y=1250"
             "[out]"
         )
-        # 720p icin scale - encode oncesi
-        # scale already in fc
 
-        # Sadece ultrafast CPU encode - Render icin optimize
-        encoded = False
-        try:
-            r2 = subprocess.run([
-                "ffmpeg", "-y", "-i", raw_f,
-                "-filter_complex", fc,
-                "-map", "[out]", "-map", "0:a?",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-c:a", "aac", "-b:a", "128k",
-                "-r", "30",  # 30fps - daha az is
-                "-movflags", "+faststart",
-                final_f
-            ], timeout=600, capture_output=True)
-            if os.path.exists(final_f) and os.path.getsize(final_f) > 10000:
-                encoded = True
-        except Exception as enc_err:
-            bot_log(uid, f"Encode hatasi: {str(enc_err)[:60]}")
-            if os.path.exists(final_f):
-                os.remove(final_f)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", raw_f,
+            "-filter_complex", fc,
+            "-map", "[out]", "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "128k",
+            "-r", "30", "-movflags", "+faststart",
+            final_f
+        ], timeout=300, capture_output=True)
 
-        # Temizle
-        if os.path.exists(raw_f):
-            os.remove(raw_f)
+        if os.path.exists(raw_f): os.remove(raw_f)
 
-        if encoded:
-            bot_log(uid, f"✅ Dikey klip hazir: clip_{ts}.mp4")
-            return f"clip_{ts}.mp4"
-        else:
+        if not os.path.exists(final_f) or os.path.getsize(final_f) < 10000:
             bot_log(uid, "Dikey montaj basarisiz")
             return None
+
+        # Supabase Storage'a yukle
+        bot_log(uid, "Supabase'e yukleniyor...")
+        fname = f"clip_{ts}.mp4"
+        with open(final_f, "rb") as f:
+            video_data = f.read()
+
+        result = sb_upload("clips", f"{uid}/{fname}", video_data)
+        if os.path.exists(final_f): os.remove(final_f)
+
+        if "error" in result:
+            bot_log(uid, f"Yukleme hatasi: {result['error']}")
+            return None
+
+        public_url = sb_public_url("clips", f"{uid}/{fname}")
+        save_clip_record(uid, fname, triggered_by, public_url)
+        bot_log(uid, f"✅ Klip hazir!")
+
+        # Active bots cache guncelle
+        if uid in active_bots:
+            active_bots[uid]["clips"].insert(0, {
+                "triggered_by": triggered_by,
+                "url": public_url,
+                "created_at": datetime.now().strftime("%d.%m %H:%M"),
+            })
+            active_bots[uid]["clips"] = active_bots[uid]["clips"][:30]
+
+        return public_url
 
     except Exception as e:
         bot_log(uid, f"Kayit hatasi: {str(e)[:80]}")
@@ -226,18 +284,15 @@ def record_clip(uid, channel, token, manual_url, duration):
             if os.path.exists(f): os.remove(f)
         return None
 
-def run_bot(uid, settings):
-    token          = settings.get("access_token", "")
-    broadcaster_id = settings.get("broadcaster_id", "")
-    channel        = settings.get("channel", "")
-    manual_url     = settings.get("manual_hls_url", "")
-    duration       = int(settings.get("clip_duration", 180))
+def run_bot(uid, user_data):
+    token          = user_data.get("access_token", "")
+    broadcaster_id = user_data.get("broadcaster_id", "")
+    channel        = user_data.get("channel", "")
 
     bot_log(uid, f"Bot basladi → kick.com/{channel}")
 
     if broadcaster_id:
         subscribe_events(uid, token, broadcaster_id)
-        # Webhook gelene kadar bekle
         while active_bots.get(uid, {}).get("running"):
             time.sleep(5)
     else:
@@ -252,21 +307,18 @@ def webhook_kick():
         return request.args.get("challenge", "ok"), 200
 
     data = request.get_json(force=True) or {}
-
-    # Kick format: {broadcaster:{user_id, username}, sender:{user_id, username}, content:...}
     broadcaster   = data.get("broadcaster") or {}
     sender_info   = data.get("sender") or data.get("chatter") or {}
     content_text  = (data.get("content") or data.get("message") or "").strip()
     broadcaster_id = str(broadcaster.get("user_id") or "")
-    msg_user      = sender_info.get("username") or sender_info.get("slug") or "?"
+    msg_user      = sender_info.get("username") or "?"
 
-    # Hangi kullanicinin botu bu broadcaster'a ait?
-    all_data = load_data()
+    # Broadcaster'a ait kullaniciyi bul
     target_uid = None
-    for uid2, udata in all_data.items():
-        if str(udata.get("broadcaster_id", "")) == broadcaster_id:
-            target_uid = uid2
-            break
+    try:
+        rows = sb_get("users", f"broadcaster_id=eq.{broadcaster_id}")
+        if rows: target_uid = rows[0]["uid"]
+    except: pass
 
     if not target_uid:
         for uid2 in active_bots:
@@ -277,27 +329,15 @@ def webhook_kick():
     if target_uid:
         bot_log(target_uid, f"Chat: {msg_user}: {content_text[:40]}")
 
-    if content_text.strip().lower() == "!clip" and target_uid and active_bots.get(target_uid, {}).get("running"):
-        settings = all_data.get(target_uid, {})
+    if content_text.lower() == "!clip" and target_uid and active_bots.get(target_uid, {}).get("running"):
+        user_data = load_user(target_uid) or {}
         bot_log(target_uid, f"🎮 !clip → {msg_user}")
 
-        def do_clip(cu=msg_user, tuid=target_uid):
-            fname = record_clip(tuid, settings.get("channel",""),
-                                settings.get("access_token",""),
-                                settings.get("manual_hls_url",""),
-                                int(settings.get("clip_duration", 180)))
-            if fname:
-                active_bots[tuid]["clips"].insert(0, {
-                    "file": fname, "user": cu,
-                    "ts": datetime.now().strftime("%d.%m %H:%M"),
-                    "url": f"/clips/{fname}"
-                })
-                active_bots[tuid]["clips"] = active_bots[tuid]["clips"][:30]
-                d2 = load_data()
-                if tuid in d2:
-                    d2[tuid]["clips"] = active_bots[tuid]["clips"]
-                    save_data(d2)
-
+        def do_clip(cu=msg_user, tuid=target_uid, ud=user_data):
+            record_and_upload(
+                tuid, ud.get("channel",""), ud.get("access_token",""),
+                ud.get("manual_hls_url",""), int(ud.get("clip_duration",180)), cu
+            )
         threading.Thread(target=do_clip, daemon=True).start()
 
     return {"status": "ok"}, 200
@@ -306,13 +346,18 @@ def webhook_kick():
 @app.route("/")
 def index():
     uid  = session.get("uid")
-    data = load_data()
-    user = data.get(uid) if uid else None
+    user = load_user(uid) if uid else None
     bot  = active_bots.get(uid, {})
+    clips = bot.get("clips") or get_user_clips(uid) if uid else []
+    # Tarihe gore grupla
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    for c in clips:
+        day = (c.get("created_at") or "")[:10]
+        grouped[day].append(c)
     return render_template("index.html",
-        user=user,
-        running=bot.get("running", False),
-        clips=bot.get("clips", (user or {}).get("clips", [])),
+        user=user, running=bot.get("running", False),
+        clips=clips, grouped_clips=dict(grouped),
         log=bot.get("log", [])[-20:],
     )
 
@@ -330,33 +375,41 @@ def callback():
     if state != session.get("oauth_state"):
         return "State mismatch!", 400
     try:
-        tokens  = exchange_code(code, session.pop("pkce_verifier", ""))
+        tokens  = exchange_code(code, session.pop("pkce_verifier",""))
         token   = tokens.get("access_token")
-        refresh = tokens.get("refresh_token", "")
+        refresh = tokens.get("refresh_token","")
         info    = get_user_info(token)
         uid     = str(info.get("user_id") or info.get("id") or secrets.token_hex(8))
         username = info.get("username") or uid
-        slug     = info.get("slug") or username.lower().replace("_", "-")
+        slug     = info.get("slug") or username.lower().replace("_","-")
 
-        # Kanal bilgilerini cek
         ch = get_channel_info(slug, token)
         broadcaster_id = str(ch.get("broadcaster_user_id") or info.get("user_id") or "")
         chatroom_id    = str(ch.get("chatroom_id") or "")
 
-        data = load_data()
-        if uid not in data:
-            data[uid] = {"clips": [], "clip_duration": 180, "cooldown": 30, "manual_hls_url": ""}
-        data[uid].update({
-            "username": username, "channel": slug,
+        existing = load_user(uid) or {}
+        save_user({
+            "uid": uid, "username": username, "channel": slug,
             "chatroom_id": chatroom_id, "broadcaster_id": broadcaster_id,
             "access_token": token, "refresh_token": refresh,
+            "clip_duration": existing.get("clip_duration", 180),
+            "cooldown": existing.get("cooldown", 30),
+            "manual_hls_url": existing.get("manual_hls_url", ""),
         })
-        save_data(data)
         session.permanent = True
         session["uid"] = uid
     except Exception as e:
         return f"Giris hatasi: {e}", 500
     return redirect("/")
+
+@app.route("/auto-login", methods=["POST"])
+def auto_login():
+    uid = request.json.get("uid","").strip()
+    if uid and load_user(uid):
+        session.permanent = True
+        session["uid"] = uid
+        return {"ok": True}
+    return {"ok": False}, 401
 
 @app.route("/logout")
 def logout():
@@ -369,30 +422,28 @@ def logout():
 def settings_save():
     uid = session.get("uid")
     if not uid: return redirect("/")
-    data = load_data()
-    if uid in data:
-        data[uid].update({
-            "channel":       request.form.get("channel", "").strip(),
-            "chatroom_id":   request.form.get("chatroom_id", "").strip(),
-            "clip_duration": int(request.form.get("clip_duration", 180)),
-            "cooldown":      int(request.form.get("cooldown", 30)),
-            "manual_hls_url": request.form.get("manual_hls_url", "").strip(),
-        })
-        save_data(data)
+    user = load_user(uid) or {}
+    user.update({
+        "uid": uid,
+        "channel":       request.form.get("channel","").strip(),
+        "chatroom_id":   request.form.get("chatroom_id","").strip(),
+        "clip_duration": int(request.form.get("clip_duration",180)),
+        "cooldown":      int(request.form.get("cooldown",30)),
+        "manual_hls_url": request.form.get("manual_hls_url","").strip(),
+    })
+    save_user(user)
     return redirect("/")
 
 @app.route("/bot/start")
 def bot_start():
     uid = session.get("uid")
     if not uid: return redirect("/")
-    data = load_data()
-    user = data.get(uid, {})
+    user = load_user(uid) or {}
     if uid not in active_bots:
-        active_bots[uid] = {"running": False, "clips": user.get("clips", []), "log": []}
+        active_bots[uid] = {"running": False, "clips": get_user_clips(uid), "log": []}
     if not active_bots[uid].get("running"):
         active_bots[uid]["running"] = True
-        t = threading.Thread(target=run_bot, args=(uid, user), daemon=True)
-        t.start()
+        threading.Thread(target=run_bot, args=(uid, user), daemon=True).start()
     return redirect("/")
 
 @app.route("/bot/stop")
