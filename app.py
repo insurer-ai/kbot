@@ -479,9 +479,18 @@ def webhook_receiver_kick():
     broadcaster_id = str(inner.get("broadcaster_user_id") or
                          data.get("broadcaster_user_id") or "")
 
+    # Tam veriyi logla - format anlamak icin
+    import json as _json
+    raw_log = _json.dumps(data)[:300]
+
     content_text = (inner.get("content") or "").strip().lower()
     sender = inner.get("sender") or {}
     msg_user = sender.get("username") or sender.get("slug") or "?"
+
+    # Tum aktif botlara logla (debug)
+    for _uid in list(active_bots.keys()):
+        if active_bots[_uid].get("running"):
+            bot_log(_uid, f"WH raw: {raw_log}")
 
     # Bu broadcaster'a ait aktif botu bul
     all_data = load_data()
