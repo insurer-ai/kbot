@@ -351,7 +351,10 @@ def callback():
         info     = get_user_info(token)
         uid      = str(info.get("user_id") or info.get("id") or secrets.token_hex(8))
         username = info.get("username") or info.get("name") or uid
-        slug     = info.get("slug") or username.lower()
+        # slug = kick.com/SLUG - kanal URL adresi
+        slug = (info.get("slug") or 
+                info.get("channel", {}).get("slug") if isinstance(info.get("channel"), dict) else None or
+                username.lower().replace("_", "-"))
 
         # Kanal bilgilerini otomatik cek
         channel_info  = {}
