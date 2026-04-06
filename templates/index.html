@@ -347,7 +347,7 @@ header{
 <header>
   <div class="logo">
     <div class="logo-mark">✂</div>
-    KBOT - Klip Botu
+    KBOT — Kick Klip Botu
   </div>
 
   {% if user %}
@@ -536,6 +536,14 @@ function fmtLog(line) {
   return `<div class="log-line"><span class="log-time">[${time}]</span><span class="log-msg ${cls}">${msg}</span></div>`;
 }
 
+// UID'yi localStorage'a kaydet (oturum kaliciligi)
+(function(){
+  {% if user %}
+  const uid = "{{ session.get('uid', '') }}";
+  if(uid) localStorage.setItem("cb_uid", uid);
+  {% endif %}
+})();
+
 setInterval(async () => {
   try {
     const r = await fetch('/api/status');
@@ -563,5 +571,23 @@ setInterval(async () => {
 }, 3000);
 </script>
 {% endif %}
+<script>
+// LocalStorage'dan UID al, otomatik giris yap
+(async function(){
+  const uid = localStorage.getItem("cb_uid");
+  if(!uid) return;
+  try {
+    const r = await fetch("/auto-login", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({uid})
+    });
+    if(r.ok) {
+      const cur = window.location.pathname;
+      if(cur === "/" || cur === "") window.location.reload();
+    }
+  } catch(e){}
+})();
+</script>
 </body>
 </html>
