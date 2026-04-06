@@ -6,6 +6,9 @@ from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = "clipbot_secret_2024_xK9mP"
+app.config["SESSION_COOKIE_SECURE"]   = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 30  # 30 gun
 
 KICK_CLIENT_ID     = "01KNFT27H9FKB3KYPN7AWBYKK4"
 KICK_CLIENT_SECRET = "4b83a5d95ca99bbc6fa1f8d9630dce2c8b5caf3682c1fc1395a0ae0fd721c0f9"
@@ -349,6 +352,7 @@ def callback():
             "access_token": token, "refresh_token": refresh,
         })
         save_data(data)
+        session.permanent = True
         session["uid"] = uid
     except Exception as e:
         return f"Giris hatasi: {e}", 500
