@@ -336,3 +336,28 @@ def serve_clip(filename):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+@app.route("/test")
+def test_kick():
+    import urllib.request, ssl, gzip
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    results = {}
+    test_urls = [
+        "https://kick.com/api/v2/channels/catikkas-gozluk/messages",
+        "https://kick.com/api/v1/chatrooms/79537432/messages",
+    ]
+    for url in test_urls:
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 Chrome/122",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+                raw = r.read()
+            if raw[:2] == b'\x1f\x8b': raw = gzip.decompress(raw)
+            results[url] = f"OK: {raw[:150].decode(errors='ignore')}"
+        except Exception as e:
+            results[url] = f"HATA: {str(e)}"
+    return "<br><br>".join([f"<b>{k}</b><br>{v}" for k,v in results.items()])
