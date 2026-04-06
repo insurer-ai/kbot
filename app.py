@@ -180,31 +180,29 @@ def record_clip(uid, channel, token, manual_url, duration):
             f"x=10:y=14:shadowcolor=black:shadowx=1:shadowy=1"
             "[out]"
         )
+        # 720p icin scale - encode oncesi
+        fc = fc.replace("[out]", "[outbig];[outbig]scale=720:1280[out]")
 
-        # GPU encode dene, olmassa CPU
+        # Sadece ultrafast CPU encode - Render icin optimize
         encoded = False
-        for enc in [
-            ["-c:v", "h264_nvenc", "-preset", "p1", "-rc", "vbr", "-cq", "24"],
-            ["-c:v", "h264_amf",   "-quality", "speed"],
-            ["-c:v", "libx264",    "-preset", "ultrafast", "-crf", "23"],
-        ]:
-            try:
-                r2 = subprocess.run([
-                    "ffmpeg", "-y", "-i", raw_f,
-                    "-filter_complex", fc,
-                    "-map", "[out]", "-map", "0:a?",
-                    *enc,
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-r", "60", "-movflags", "+faststart",
-                    final_f
-                ], timeout=300, capture_output=True)
-                if os.path.exists(final_f) and os.path.getsize(final_f) > 10000:
-                    encoded = True
-                    break
-            except:
-                if os.path.exists(final_f):
-                    os.remove(final_f)
-                continue
+        try:
+            r2 = subprocess.run([
+                "ffmpeg", "-y", "-i", raw_f,
+                "-filter_complex", fc,
+                "-map", "[out]", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-vf", "scale=720:1280",  # 720p dikey - daha hizli
+                "-c:a", "aac", "-b:a", "128k",
+                "-r", "30",  # 30fps - daha az is
+                "-movflags", "+faststart",
+                final_f
+            ], timeout=600, capture_output=True)
+            if os.path.exists(final_f) and os.path.getsize(final_f) > 10000:
+                encoded = True
+        except Exception as enc_err:
+            bot_log(uid, f"Encode hatasi: {str(enc_err)[:60]}")
+            if os.path.exists(final_f):
+                os.remove(final_f)
 
         # Temizle
         if os.path.exists(raw_f):
