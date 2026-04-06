@@ -351,11 +351,43 @@ def callback():
         info     = get_user_info(token)
         uid      = str(info.get("user_id") or info.get("id") or secrets.token_hex(8))
         username = info.get("username") or info.get("name") or uid
+        slug     = info.get("slug") or username.lower()
+
+        # Kanal bilgilerini otomatik cek
+        channel_info  = {}
+        chatroom_id   = ""
+        broadcaster_id = ""
+        try:
+            ch_resp = fetch(f"https://api.kick.com/public/v1/channels?slug={slug}", token=token)
+            ch_data = json.loads(ch_resp)
+            ch_items = ch_data.get("data") or []
+            if ch_items:
+                ch = ch_items[0]
+                broadcaster_id = str(ch.get("broadcaster_user_id") or "")
+                chatroom_id    = str(ch.get("chatroom_id") or "")
+        except Exception as e:
+            pass
+
+        # chatroom_id API v1 ile de dene
+        if not chatroom_id:
+            try:
+                v1_resp = fetch(f"https://kick.com/api/v1/channels/{slug}", token=token)
+                v1_data = json.loads(v1_resp)
+                chatroom_id = str((v1_data.get("chatroom") or {}).get("id") or "")
+            except:
+                pass
 
         data = load_data()
         if uid not in data:
-            data[uid] = {"username": username, "channel": username, "chatroom_id": "",
+            data[uid] = {"username": username, "channel": slug,
+                         "chatroom_id": chatroom_id, "broadcaster_id": broadcaster_id,
                          "clip_duration": 180, "cooldown": 30, "manual_hls_url": "", "clips": []}
+        else:
+            # Mevcut kullanicinin bilgilerini guncelle
+            data[uid]["channel"]        = slug
+            if chatroom_id:   data[uid]["chatroom_id"]    = chatroom_id
+            if broadcaster_id: data[uid]["broadcaster_id"] = broadcaster_id
+
         data[uid]["access_token"]  = token
         data[uid]["refresh_token"] = refresh
         data[uid]["username"]      = username
