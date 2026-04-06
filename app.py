@@ -10,7 +10,7 @@ app.secret_key = "clipbot_secret_key_change_this"
 # ── Kick OAuth ────────────────────────────────────────────
 KICK_CLIENT_ID     = "01KNFT27H9FKB3KYPN7AWBYKK4"
 KICK_CLIENT_SECRET = "4b83a5d95ca99bbc6fa1f8d9630dce2c8b5caf3682c1fc1395a0ae0fd721c0f9"
-REDIRECT_URI       = "https://kbot-u8we.onrender.com/callbackk"
+REDIRECT_URI       = "https://kbot-u8we.onrender.com/callback"
 SCOPES             = "user:read channel:read events:subscribe"
 
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
