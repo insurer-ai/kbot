@@ -334,9 +334,6 @@ def api_status():
 def serve_clip(filename):
     return send_from_directory(CLIPS_DIR, filename)
 
-if __name__ == "__main__":
-    app.run(debug=True)
-
 @app.route("/test")
 def test_kick():
     import urllib.request, ssl, gzip
@@ -361,3 +358,8 @@ def test_kick():
         except Exception as e:
             results[url] = f"HATA: {str(e)}"
     return "<br><br>".join([f"<b>{k}</b><br>{v}" for k,v in results.items()])
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
