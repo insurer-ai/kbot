@@ -122,23 +122,26 @@ def record_clip(uid, channel, token, manual_url, duration):
         return None
 
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    raw_f   = os.path.join(CLIPS_DIR, f"raw_{ts}.mp4")
+    raw_f   = os.path.join(CLIPS_DIR, f"raw_{ts}.ts")   # .ts = daha az bellek
     final_f = os.path.join(CLIPS_DIR, f"clip_{ts}.mp4")
     safe_ch = channel.replace("'","").replace(":","").replace("\\","")
 
     try:
-        # 1. Ham kayit
+        # 1. Ham kayit - dusuk cozunurluk, az bellek
         bot_log(uid, f"Kaydediliyor ({duration}s)...")
         r = subprocess.run([
-            "ffmpeg", "-y", "-i", hls,
+            "ffmpeg", "-y",
+            "-i", hls,
             "-t", str(duration),
-            "-c", "copy",
-            "-movflags", "+faststart",
+            "-vf", "scale=640:360",       # kayit sirasinda kucult - az RAM
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "96k",
+            "-r", "30",
             raw_f
-        ], timeout=duration+60, capture_output=True)
+        ], timeout=duration+120, capture_output=True)
 
         if not os.path.exists(raw_f) or os.path.getsize(raw_f) < 10000:
-            bot_log(uid, "Ham kayit basarisiz")
+            bot_log(uid, f"Ham kayit basarisiz: {r.stderr.decode()[-200:] if r else ''}")
             return None
 
         bot_log(uid, "Dikey formata cevriliyior (9:16)...")
@@ -148,40 +151,40 @@ def record_clip(uid, channel, token, manual_url, duration):
         # - Alt yari: koyu panel + KICK + kanal adi
         # - Sol ust kose: @kanal etiketi
         fc = (
-            # Blur arka plan (tum ekrani kaplar)
-            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,boxblur=20:5[bg];"
-            # Ana oyun video (ust 1080px)
-            "[0:v]scale=1080:1080:force_original_aspect_ratio=decrease,"
-            "pad=1080:1080:(ow-iw)/2:(oh-ih)/2:black@0[game];"
+            # Blur arka plan
+            "[0:v]scale=720:1280:force_original_aspect_ratio=increase,"
+            "crop=720:1280,boxblur=15:4[bg];"
+            # Ana oyun video (ust 720px kare)
+            "[0:v]scale=720:720:force_original_aspect_ratio=decrease,"
+            "pad=720:720:(ow-iw)/2:(oh-ih)/2:black@0[game];"
             # Birlestir
             "[bg][game]overlay=0:0[merged];"
             # Overlayleri ekle
             "[merged]"
             # Alt panel
-            "drawbox=x=0:y=1080:w=iw:h=840:color=0x050510@0.95:t=fill,"
+            "drawbox=x=0:y=720:w=iw:h=560:color=0x050510@0.95:t=fill,"
             # Yesil cizgi
-            "drawbox=x=0:y=1080:w=iw:h=4:color=0x53FC18:t=fill,"
+            "drawbox=x=0:y=720:w=iw:h=4:color=0x53FC18:t=fill,"
             # KICK yazisi
-            f"drawtext=text='KICK':fontsize=130:fontcolor=0x53FC18:"
-            f"x=(w-text_w)/2:y=1120:"
+            f"drawtext=text='KICK':fontsize=90:fontcolor=0x53FC18:"
+            f"x=(w-text_w)/2:y=750:"
             f"shadowcolor=black@0.9:shadowx=3:shadowy=3,"
             # Kanal adi
-            f"drawtext=text='{safe_ch}':fontsize=72:fontcolor=white:"
-            f"x=(w-text_w)/2:y=1310:"
+            f"drawtext=text='{safe_ch}':fontsize=50:fontcolor=white:"
+            f"x=(w-text_w)/2:y=900:"
             f"shadowcolor=black@0.8:shadowx=2:shadowy=2,"
             # kick.com linki
-            f"drawtext=text='kick.com/{safe_ch}':fontsize=48:fontcolor=0x53FC18@0.85:"
-            f"x=(w-text_w)/2:y=1430:"
+            f"drawtext=text='kick.com/{safe_ch}':fontsize=32:fontcolor=0x53FC18@0.85:"
+            f"x=(w-text_w)/2:y=980:"
             f"shadowcolor=black@0.6:shadowx=1:shadowy=1,"
             # Sol ust etiket
-            f"drawbox=x=0:y=0:w=380:h=56:color=black@0.65:t=fill,"
-            f"drawtext=text='  @{safe_ch}':fontsize=30:fontcolor=white:"
+            f"drawbox=x=0:y=0:w=280:h=42:color=black@0.65:t=fill,"
+            f"drawtext=text='  @{safe_ch}':fontsize=22:fontcolor=white:"
             f"x=10:y=14:shadowcolor=black:shadowx=1:shadowy=1"
             "[out]"
         )
         # 720p icin scale - encode oncesi
-        fc = fc.replace("[out]", "[outbig];[outbig]scale=720:1280[out]")
+        # scale already in fc
 
         # Sadece ultrafast CPU encode - Render icin optimize
         encoded = False
@@ -191,7 +194,6 @@ def record_clip(uid, channel, token, manual_url, duration):
                 "-filter_complex", fc,
                 "-map", "[out]", "-map", "0:a?",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                "-vf", "scale=720:1280",  # 720p dikey - daha hizli
                 "-c:a", "aac", "-b:a", "128k",
                 "-r", "30",  # 30fps - daha az is
                 "-movflags", "+faststart",
