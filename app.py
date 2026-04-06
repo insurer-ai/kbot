@@ -10,7 +10,7 @@ app.secret_key = "clipbot_secret_key_change_this"
 # ── Kick OAuth ────────────────────────────────────────────
 KICK_CLIENT_ID     = "01KNFT27H9FKB3KYPN7AWBYKK4"
 KICK_CLIENT_SECRET = "4b83a5d95ca99bbc6fa1f8d9630dce2c8b5caf3682c1fc1395a0ae0fd721c0f9"
-REDIRECT_URI       = "https://kbot-u8we.onrender.com/callback"
+REDIRECT_URI       = "https://insurer.pythonanywhere.com/callback"
 SCOPES             = "user:read channel:read events:subscribe"
 
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
@@ -125,8 +125,8 @@ def record_clip(uid, channel, token, manual_url, duration, clips_dir):
     return None
 
 def poll_chat(uid, settings):
-    channel     = settings.get("channel", "")
-    chatroom_id = settings.get("chatroom_id", "")
+    channel     = settings.get("channel", "").strip().lower()
+    chatroom_id = settings.get("chatroom_id", "").strip()
     token       = settings.get("access_token", "")
     manual_url  = settings.get("manual_hls_url", "")
     duration    = int(settings.get("clip_duration", 180))
@@ -134,64 +134,83 @@ def poll_chat(uid, settings):
     cooldowns   = {}
     seen_ids    = set()
     clip_in_progress = False
+    error_count = 0
 
-    bot_log(uid, f"Bot basladi → kick.com/{channel}")
+    bot_log(uid, f"Bot basladi → kick.com/{channel} (chatroom:{chatroom_id})")
 
     while active_bots.get(uid, {}).get("running"):
         try:
             hdrs = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122",
-                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8",
                 "Referer": f"https://kick.com/{channel}",
+                "Origin": "https://kick.com",
             }
             if token: hdrs["Authorization"] = f"Bearer {token}"
+
+            # Tum endpoint kombinasyonlarini dene
             endpoints = [
                 f"https://kick.com/api/v2/channels/{channel}/messages",
+                f"https://kick.com/api/v1/channels/{channel}/messages",
+                f"https://kick.com/api/v2/chatrooms/{chatroom_id}/messages",
                 f"https://kick.com/api/v1/chatrooms/{chatroom_id}/messages",
             ]
+
             msgs = []
             for ep in endpoints:
                 try:
                     req = urllib.request.Request(ep, headers=hdrs)
-                    with urllib.request.urlopen(req, timeout=6, context=make_ctx()) as r:
+                    with urllib.request.urlopen(req, timeout=8, context=make_ctx()) as r:
                         raw = r.read()
                     if raw[:2] == b'\x1f\x8b': raw = gzip.decompress(raw)
                     d = json.loads(raw.decode("utf-8", errors="ignore"))
                     msgs = (d.get("data") or {}).get("messages") or d.get("messages") or []
-                    if msgs: break
-                except: continue
+                    if msgs is not None and len(msgs) >= 0:
+                        error_count = 0
+                        break
+                except Exception as ep_err:
+                    continue
 
-            for m in msgs:
+            if not msgs and error_count == 0:
+                error_count += 1
+            elif not msgs:
+                error_count += 1
+                if error_count == 10:
+                    bot_log(uid, f"Mesaj cekilemiyor! Kanal adi ve Chatroom ID dogru mu?")
+                    error_count = 0
+
+            for m in (msgs or []):
                 mid = m.get("id")
                 if not mid or mid in seen_ids: continue
                 seen_ids.add(mid)
                 if len(seen_ids) > 500: seen_ids = set(list(seen_ids)[-200:])
 
-                content = (m.get("content") or "").strip().lower()
+                msg_content = (m.get("content") or "").strip().lower()
                 sender  = m.get("sender") or {}
-                user    = sender.get("username") or "?"
+                user    = sender.get("username") or sender.get("slug") or "?"
 
-                if content == "!clip" and not clip_in_progress:
+                if msg_content == "!clip" and not clip_in_progress:
                     now  = time.time()
                     last = cooldowns.get(user, 0)
                     if now - last < cooldown:
                         bot_log(uid, f"{user}: {int(cooldown-(now-last))}s cooldown")
                         continue
                     cooldowns[user] = now
-                    bot_log(uid, f"!clip alindi → {user}")
+                    bot_log(uid, f"✅ !clip alindi → {user}")
                     clip_in_progress = True
 
-                    def do_clip():
+                    clip_user = user
+                    def do_clip(cu=clip_user):
                         nonlocal clip_in_progress
                         fname = record_clip(uid, channel, token, manual_url, duration, CLIPS_DIR)
                         if fname:
                             active_bots[uid]["clips"].insert(0, {
-                                "file": fname, "user": user,
+                                "file": fname, "user": cu,
                                 "ts": datetime.now().strftime("%d.%m %H:%M"),
                                 "url": f"/clips/{fname}"
                             })
                             active_bots[uid]["clips"] = active_bots[uid]["clips"][:30]
-                            # Kullanici verisine kaydet
                             data = load_data()
                             if uid in data:
                                 data[uid]["clips"] = active_bots[uid]["clips"]
@@ -201,7 +220,7 @@ def poll_chat(uid, settings):
                     threading.Thread(target=do_clip, daemon=True).start()
 
         except Exception as e:
-            bot_log(uid, f"Hata: {str(e)[:60]}")
+            bot_log(uid, f"Hata: {str(e)[:80]}")
 
         time.sleep(2)
 
