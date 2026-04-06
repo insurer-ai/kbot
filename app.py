@@ -181,7 +181,12 @@ def subscribe_kick_events(uid, token, channel_name, broadcaster_id):
             if raw[:2] == b'\x1f\x8b': raw = gzip.decompress(raw)
             result = json.loads(raw)
             bot_log(uid, f"✅ Event subscription OK: {str(result)[:100]}")
-            return result.get("data", {}).get("id") or "ok"
+            data_field = result.get("data")
+            if isinstance(data_field, list) and data_field:
+                return data_field[0].get("subscription_id") or "ok"
+            elif isinstance(data_field, dict):
+                return data_field.get("id") or data_field.get("subscription_id") or "ok"
+            return "ok"
         except Exception as e:
             bot_log(uid, f"Format deneniyor... {str(e)[:60]}")
             continue
