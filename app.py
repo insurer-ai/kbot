@@ -15,7 +15,7 @@ SCOPES             = "user:read channel:read events:subscribe chat:write"
 WEBHOOK_URL        = "https://kbot-u8we.onrender.com/webhook/kick"
 
 SUPABASE_URL = "https://ciifjrpwvjtzamskwufu.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNpaWZqcnB3dmp0emFtc2t3dWZ1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ3MTUxNCwiZXhwIjoyMDkxMDQ3NTE0fQ.KnlTGTXaXnIs9wHg-nB43dv6QqH4WWRB23xw6hCr8ow"
+SUPABASE_KEY = os.environ.get("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNpaWZqcnB3dmp0emFtc2t3dWZ1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ3MTUxNCwiZXhwIjoyMDkxMDQ3NTE0fQ.KnlTGTXaXnIs9wHg-nB43dv6QqH4WWRB23xw6hCr8ow", "")
 
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 CLIPS_DIR = os.path.join(BASE_DIR, "static", "clips")
